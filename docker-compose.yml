@@ -1,0 +1,138 @@
+x-app: &default-app
+  build:
+    context: "."
+    dockerfile: ./.docker/app/Dockerfile
+    target: "app"
+    args:
+      - "UID=${UID:-1000}"
+      - "GID=${GID:-1000}"
+      - "RAILS_ENV=${RAILS_ENV:-production}"
+      - "NODE_ENV=${NODE_ENV:-production}"
+  depends_on:
+    - "postgres"
+    - "redis"
+  env_file:
+    - ".env"
+  restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+  stop_grace_period: "3s"
+  tty: true
+  networks:
+    - sample_app_common_network
+  volumes:
+    - ".:/app"
+    - "bundle:/usr/local/bundle"
+    - "sockets:/app/tmp/sockets"
+
+x-assets: &default-assets
+  build:
+    context: "."
+    dockerfile: ./.docker/app/Dockerfile
+    target: "assets"
+    args:
+      - "UID=${UID:-1000}"
+      - "GID=${GID:-1000}"
+      - "RAILS_ENV=${RAILS_ENV:-production}"
+      - "NODE_ENV=${NODE_ENV:-production}"
+  env_file:
+    - ".env"
+  profiles: ["assets"]
+  restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+  stop_grace_period: "3s"
+  tty: true
+  networks:
+    - sample_app_common_network
+  volumes:
+    - ".:/app"
+    - "sockets:/app/tmp/sockets"
+
+services:
+  postgres:
+    build:
+      context: "."
+      dockerfile: ./.docker/db/Dockerfile
+      target: "postgres"
+    env_file:
+      - ".env"
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    profiles: ["postgres"]
+    restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+    stop_grace_period: "3s"
+    ports:
+      - 5432:5432
+    networks:
+      - sample_app_common_network
+    volumes:
+      - "./.docker/db/script:/docker-entrypoint-initdb.d"
+      - "postgres:/var/lib/postgresql/data"
+      - "sockets:/app/tmp/sockets"
+
+  nginx:
+    build:
+      context: "."
+      dockerfile: ./.docker/nginx/Dockerfile
+      target: "nginx"
+    ports:
+      - "${DOCKER_WEB_PORT_FORWARD}:${DOCKER_WEB_PORT_FORWARD}"
+    profiles: ["nginx"]
+    restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+    stop_grace_period: "3s"
+    volumes:
+      - "sockets:/app/tmp/sockets"
+    networks:
+      - sample_app_common_network
+    depends_on:
+      - "web"
+
+  redis:
+    build:
+      context: "."
+      dockerfile: ./.docker/redis/Dockerfile
+      target: "redis"
+    env_file:
+      - ".env"
+    profiles: ["redis"]
+    restart: "${DOCKER_RESTART_POLICY:-unless-stopped}"
+    stop_grace_period: "3s"
+    networks:
+      - sample_app_common_network
+    volumes:
+      - "redis:/data"
+      - "sockets:/app/tmp/sockets"
+
+  web:
+    <<: *default-app
+    profiles: ["web"]
+
+  worker:
+    <<: *default-app
+    command: "bundle exec sidekiq -C config/sidekiq.yml"
+    entrypoint: []
+    profiles: ["worker"]
+
+  cable:
+    <<: *default-app
+    command: "puma -p 28080 cable/config.ru"
+    entrypoint: []
+    ports:
+      - "${DOCKER_CABLE_PORT_FORWARD:-127.0.0.1:28080}:28080"
+    profiles: ["cable"]
+
+  js:
+    <<: *default-assets
+    command: "yarn build"
+
+  css:
+    <<: *default-assets
+    command: "yarn build:css"
+
+networks:
+  sample_app_common_network:
+    external: true
+
+volumes:
+  sockets: {}
+  bundle: {}
+  postgres: {}
+  redis: {}
